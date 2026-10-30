@@ -7,3 +7,5 @@ __pycache__/
 datasets/
 runs/
 *.pt
+*.mp4
+docs/bag*/
