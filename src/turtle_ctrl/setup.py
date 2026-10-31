@@ -30,6 +30,7 @@ setup(
             'circle = turtle_ctrl.circle:main',
             'pose_listener = turtle_ctrl.pose_listener:main',
             'param_circle = turtle_ctrl.param_circle:main',
+            'tf_demo = turtle_ctrl.tf_demo:main',
         ],
     },
 )
