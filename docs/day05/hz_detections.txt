@@ -1,0 +1,7 @@
+WARNING: topic [/detections] does not appear to be published yet
+average rate: 9.947
+	min: 0.090s max: 0.112s std dev: 0.00605s window: 12
+average rate: 9.969
+	min: 0.090s max: 0.112s std dev: 0.00451s window: 22
+average rate: 9.967
+	min: 0.090s max: 0.112s std dev: 0.00386s window: 32

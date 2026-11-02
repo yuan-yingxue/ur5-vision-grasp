@@ -1,0 +1,5 @@
+/camera/camera_info
+/camera/image_raw
+/detections
+/parameter_events
+/rosout
