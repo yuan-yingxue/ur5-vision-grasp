@@ -32,6 +32,7 @@ setup(
             'param_circle = turtle_ctrl.param_circle:main',
             'tf_demo = turtle_ctrl.tf_demo:main',
             'detector = turtle_ctrl.detector:main',
+            'grasp_pose = turtle_ctrl.grasp_pose:main',
         ],
     },
 )
