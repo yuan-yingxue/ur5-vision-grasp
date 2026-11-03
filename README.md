@@ -7,15 +7,19 @@
 
 ## 这是什么
 
-一个从零开始搭建的 **ROS2 机器人视觉抓取系统**，最终目标是：
+一个从零搭建的 **ROS2 视觉抓取系统**：把一张相机图像，变成机械臂能执行的抓取位姿。
 
 ```
-摄像头图像 → YOLO 检测 → 像素反投影 → 手眼标定 → MoveIt2 规划 → UR5 执行抓取
+图像 → YOLO 检测 → 像素反投影 → MoveIt2 规划 → UR5 执行
 ```
 
-背景：电气工程本科，保研至浙江大学工程师学院机械（具身操作方向）。毕业设计课题为**电力场景下的机械臂操作**，硬件平台是实验室的 UR5。这个仓库是入学前把技术栈跑通的过程记录，也是毕设的前期工作。
+![pipeline](docs/pipeline_diagram.png)
 
-**当前状态**：ROS2 基础已打通，正在进入视觉与坐标变换阶段。
+*反投影依赖三个前提：相机内参、相机到基座的坐标变换、桌面平面假设。*
+
+**背景**：电气工程本科，保研至浙江大学工程师学院机械（具身操作方向）。毕业设计课题为**电力场景下的机械臂操作**，硬件平台是实验室的 UR5。这个仓库是入学前把技术栈跑通的过程记录，也是毕设的前期工作。
+
+**当前状态**：检测 → 相机标定 → 像素到 3D 已打通，正在做抓取位姿（位置 + 姿态）。
 
 ---
 
@@ -25,50 +29,91 @@
 |---|---|---|---|
 | — | Day 1 | 节点与话题（publisher / subscriber） | ✅ |
 | — | Day 2 | 服务、参数、launch、rosbag | ✅ |
-| 第一周 | Day 3 | tf2 坐标变换 | ✅ |
-| 第一周 | Day 4 | YOLO 训练（mAP50 0.97） | ✅ |
-| 第一周 | Day 5 | 包成 ROS2 节点 | 🔄 |
-| 第一周 | Day 6–7 | 相机标定 + 像素到 3D | ⬜ |
+| 第一周 | Day 3 | tf2 坐标变换 + 四元数 | ✅ |
+| 第一周 | Day 4 | YOLO 训练（mAP50 0.972） | ✅ |
+| 第一周 | Day 5 | 包成 ROS2 检测节点 | ✅ |
+| 第一周 | Day 6 | 相机标定 + 像素到 3D（RMS 1.37 px） | ✅ |
+| 第一周 | Day 7 | 抓取位姿（位置 + 姿态） | 🔄 |
 | 第二周 | Day 8–10 | MoveIt2 + 抓取闭环 + 成功率统计 | ⬜ |
 | 第二周 | Day 11–14 | 失败分析 + 示教数据管线 + 论文阅读 | ⬜ |
 | 第三周 | Day 15–21 | 面试准备 + 作品集整理 | ⬜ |
 
-详细日程见 `docs/` 与每日提交记录。
+详细日程与每日证据见 `docs/` 与提交记录。
 
 ---
 
 ## 目前完成的内容
 
-| 文件 | 说明 |
+| 文件 / 目录 | 说明 |
 |---|---|
-| `src/turtle_ctrl/turtle_ctrl/circle.py` | 发布者：以固定线速度/角速度驱动 turtlesim 画圆 |
-| `src/turtle_ctrl/turtle_ctrl/pose_listener.py` | 订阅者：实时打印乌龟位姿 |
-| `src/turtle_ctrl/turtle_ctrl/param_circle.py` | 用 ROS2 参数控制圆半径，支持运行时热修改 |
-| `src/turtle_ctrl/launch/demo.launch.py` | 一条命令启动三个节点，带 `use_circle` 开关 |
+| `src/turtle_ctrl/turtle_ctrl/circle.py` | 发布者：驱动 turtlesim 画圆 |
+| `src/turtle_ctrl/turtle_ctrl/pose_listener.py` | 订阅者：实时打印位姿 |
+| `src/turtle_ctrl/turtle_ctrl/param_circle.py` | 用 ROS2 参数控制半径，支持运行时热改 |
+| `src/turtle_ctrl/turtle_ctrl/detector.py` | YOLOv8 检测节点：订阅图像，发布像素框 |
+| `src/turtle_ctrl/turtle_ctrl/grasp_pose.py` | 反投影节点：像素框 → 基座 3D 位姿 |
+| `src/turtle_ctrl/launch/demo.launch.py` | 一条命令起多节点，带条件开关 |
+| `calib/` | 15 张棋盘格标定图 + `camera_params.npz` |
 
 **已验证**：
 
-- `ros2 param set /param_circle radius 2.0` 可实时改变圆的半径
-- `ros2 bag record` / `play` 可录制并复现话题数据
-- launch 文件用 `use_circle:=false` 可切换"录制模式"与"回放模式"
+- 检测：60 张图训练，mAP50 **0.972**，单帧推理 **3.3 ms**
+- 标定：15 张图，重投影误差 **1.37 px**，输出 `K640`
+- 反投影：三个物体输出 `(X, Y, Z)`，Z 恒为 0（平面假设的结果）
+- 检测节点能跟上 **9.95 Hz** 的输入频率
+- `ros2 param set` / `ros2 bag` / launch 条件启动均已跑通
+
+---
+
+## 关键数字
+
+| 指标 | 值 | 含义 |
+|---|---|---|
+| mAP50 | 0.972 | 60 张训练 / 12 张验证，样本偏小 |
+| 推理延迟 | 3.3 ms | 640×480 输入 |
+| 标定 RMS | 1.37 px | 换算到 0.5 m 约 0.23 mm |
+| 空间分辨率 | 1 px ≈ 1.1 mm | 相机高 0.8 m 时 |
+| 检测频率 | 9.95 Hz | 够实时抓取 |
 
 ---
 
 ## 快速开始
 
-环境：Windows 11 + WSL2 (Ubuntu 22.04) + ROS2 Humble + Python 3.10
+**环境**：Windows 11 + WSL2 (Ubuntu 22.04) + ROS2 Humble + Python 3.10 + RTX 4060
 
 ```bash
-# 1. 编译
+# 0. 编译
 cd ~/ros2_ws
 colcon build --symlink-install --packages-select turtle_ctrl
 source install/setup.bash
+```
 
-# 2. 启动（三个节点）
-ros2 launch turtle_ctrl demo.launch.py
+```bash
+# 1. 发布相机到基座的坐标变换（终端 1）
+ros2 run tf2_ros static_transform_publisher --x 0.5 --y 0.0 --z 0.8 \
+  --qx 1 --qy 0 --qz 0 --qw 0 \
+  --frame-id base_link --child-frame-id camera_link
+```
 
-# 3. 另开终端，运行中改参数
-ros2 param set /param_circle radius 2.0
+```bash
+# 2. 假相机（终端 2）—— 真机时换成真实相机驱动
+ros2 run image_publisher image_publisher_node "$(ls ~/ros2_ws/datasets/grasp/valid/images/*.jpg | head -1)" \
+  --ros-args -r image_raw:=/camera/image_raw -r camera_info:=/camera/camera_info -p frame_id:=camera_link
+```
+
+```bash
+# 3. 检测（终端 3）
+ros2 run turtle_ctrl detector
+
+# 4. 反投影（终端 4）
+ros2 run turtle_ctrl grasp_pose
+```
+
+预期在终端 4 看到：
+
+```
+[INFO] cls=1 conf=0.99 pos=(0.691, 0.206, 0.000)
+[INFO] cls=0 conf=0.97 pos=(0.448, 0.033, 0.000)
+[INFO] cls=2 conf=0.99 pos=(0.594, -0.248, 0.000)
 ```
 
 ---
@@ -82,8 +127,8 @@ ros2_ws/
 │   ├── launch/                # launch 文件
 │   ├── setup.py
 │   └── package.xml
-├── docs/                      # 每日证据（截图、录屏、命令输出）
-│   └── day02/
+├── calib/                     # 标定图 + camera_params.npz
+├── docs/                      # 每日证据（图 / 命令输出 / 链路图）
 └── README.md
 ```
 
@@ -91,7 +136,7 @@ ros2_ws/
 
 ## 路线图
 
-- **第一周**：ROS2 基础 + YOLO 训练 + 相机标定，做到"一张图 → 一个基座坐标系下的 3D 点"
+- **第一周**：ROS2 基础 → YOLO 训练 → 相机标定 → 像素到 3D
 - **第二周**：MoveIt2 规划 + 抓取闭环 + 成功率统计 + 示教数据管线
 - **第三周**：失败分析、简历与作品集、面试准备
 
