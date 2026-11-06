@@ -33,6 +33,8 @@ setup(
             'tf_demo = turtle_ctrl.tf_demo:main',
             'detector = turtle_ctrl.detector:main',
             'grasp_pose = turtle_ctrl.grasp_pose:main',
+            'detector_seg = turtle_ctrl.detector_seg:main',
+            'grasp_pose_v3 = turtle_ctrl.grasp_pose_v3:main',
         ],
     },
 )
