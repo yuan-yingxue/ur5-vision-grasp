@@ -35,6 +35,10 @@ setup(
             'grasp_pose = turtle_ctrl.grasp_pose:main',
             'detector_seg = turtle_ctrl.detector_seg:main',
             'grasp_pose_v3 = turtle_ctrl.grasp_pose_v3:main',
+            'grasp_executor = turtle_ctrl.grasp_executor:main',
+            'image_cycler = turtle_ctrl.image_cycler:main',
+            'add_table = turtle_ctrl.add_table:main',
+            'det_view = turtle_ctrl.det_view:main',
         ],
     },
 )

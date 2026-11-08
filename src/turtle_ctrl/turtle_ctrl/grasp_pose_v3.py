@@ -51,6 +51,12 @@ class GraspPoseV3(Node):
         self.plane_z = 0.0
         self.gripper_max = 0.085
         self.margin = 0.01
+        # 目标类别与置信度门槛（可用 --ros-args -p 覆盖）
+        #   实测：真计算器 >= 0.95，误检约 0.8，所以门槛取 0.9
+        self.declare_parameter('target_class', 0)
+        self.declare_parameter('conf_target', 0.9)
+        self.TARGET_CLASS = int(self.get_parameter('target_class').value)
+        self.CONF_TARGET = float(self.get_parameter('conf_target').value)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -58,6 +64,7 @@ class GraspPoseV3(Node):
         self.sub = self.create_subscription(
             Float32MultiArray, '/seg_polygons', self.cb, 10)
         self.pub = self.create_publisher(PoseArray, '/grasp_poses_v3', 10)
+        self.pub_target = self.create_publisher(PoseArray, '/grasp_target', 10)
         self.pub_info = self.create_publisher(Float32MultiArray, '/grasp_info_v3', 10)
 
         self.get_logger().info('grasp_pose_v3 ready')
@@ -146,6 +153,18 @@ class GraspPoseV3(Node):
 
             poses.poses.append(pose)
             info += [float(cls), float(conf), float(width), float(math.degrees(yaw))]
+
+            if int(cls) == self.TARGET_CLASS and float(conf) >= self.CONF_TARGET:
+                ta = PoseArray()
+                ta.header = poses.header
+                ta.poses.append(pose)
+                self.pub_target.publish(ta)
+                self.get_logger().info(
+                    f'>>> 目标命中: cls={int(cls)} conf={conf:.2f} '
+                    f'(门槛 {self.CONF_TARGET:.2f})')
+            elif int(cls) == self.TARGET_CLASS:
+                self.get_logger().warn(
+                    f'目标类别但置信度不足: conf={conf:.2f} < {self.CONF_TARGET:.2f}，丢弃')
 
             self.get_logger().info(
                 f'cls={int(cls)} conf={conf:.2f} 点={n} '

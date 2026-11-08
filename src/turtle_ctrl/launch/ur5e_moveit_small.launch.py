@@ -1,8 +1,7 @@
-"""UR5e + MoveIt2 + 小窗口 RViz
+"""UR5e + 假硬件 + MoveIt + 小窗口 RViz（一条命令）。
 
-用法:
-    ros2 launch turtle_ctrl ur5e_moveit_small.launch.py
-    ros2 launch turtle_ctrl ur5e_moveit_small.launch.py ur_type:=ur5
+  1. ur_control.launch.py       假硬件：/joint_states + robot_state_publisher
+  2. ur_moveit_small.launch.py  官方 launch 副本，只改了 rviz 配置路径
 """
 import os
 
@@ -11,40 +10,37 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
-
-# 自定义的小窗口 rviz 配置（原版是 2560x1381，改成了 1200x780）
-RVIZ_CONFIG = os.path.expanduser('~/ros2_ws/rviz/ur5e_small.rviz')
 
 
 def generate_launch_description():
     ur_type = LaunchConfiguration('ur_type')
+    robot_ip = LaunchConfiguration('robot_ip')
+    my_launch = os.path.join(get_package_share_directory('turtle_ctrl'), 'launch')
 
-    # 复用官方 launch，但不要它自带的 RViz
-    ur_moveit = IncludeLaunchDescription(
+    control = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('ur_moveit_config'),
-                'launch', 'ur_moveit.launch.py',
-            )
-        ),
+            os.path.join(get_package_share_directory('ur_robot_driver'),
+                         'launch', 'ur_control.launch.py')),
         launch_arguments={
             'ur_type': ur_type,
+            'robot_ip': robot_ip,
+            'use_fake_hardware': 'true',
             'launch_rviz': 'false',
         }.items(),
     )
 
-    rviz = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2_moveit',
-        arguments=['-d', RVIZ_CONFIG],
-        output='screen',
+    moveit = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(my_launch, 'ur_moveit_small.launch.py')),
+        launch_arguments={
+            'ur_type': ur_type,
+            'launch_rviz': 'true',
+        }.items(),
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument('ur_type', default_value='ur5e',
-                              description='ur3e/ur5e/ur10e（老款 ur3/ur5/ur10）'),
-        ur_moveit,
-        rviz,
+        DeclareLaunchArgument('ur_type', default_value='ur5e'),
+        DeclareLaunchArgument('robot_ip', default_value='0.0.0.0'),
+        control,
+        moveit,
     ])

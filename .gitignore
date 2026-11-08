@@ -9,3 +9,4 @@ runs/
 *.pt
 *.mp4
 docs/bag*/
+calib_test/
