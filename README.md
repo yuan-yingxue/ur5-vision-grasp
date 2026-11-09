@@ -1,178 +1,131 @@
-# UR5 Vision Grasp · 21 天冲刺
+# UR5 视觉抓取 · 毕设前期技术栈记录
 
-> 从 ROS2 零基础，到 UR5 机械臂视觉抓取闭环。
-> 21 天，每天 2–3 小时，全部过程记录在这个仓库里。
+> 毕设题目是**面向电力设备操作的机械臂视觉引导**（UR5 + ROS2 + 视觉）。
+> 这个仓库是入学前把相关技术栈摸熟的过程记录：一边查文档一边搭，跑通了写下来，卡住了也写下来。
+> 以记录为主，代码保持可运行。
 
 ---
 
-## 这是什么
+## 为什么从这儿开始
 
-一个从零搭建的 **ROS2 视觉抓取系统**：把一张相机图像，变成机械臂能执行的抓取位姿。
+毕设要做的事情拆开看是三块：
 
-```
-图像 → YOLO 检测 → 像素反投影 → MoveIt2 规划 → UR5 执行
-```
+1. 让机械臂动起来 —— ROS2 + MoveIt2
+2. 让相机知道自己在桌面的哪个位置 —— 相机标定
+3. 把画面上的像素变成三维坐标 —— 反投影
+
+三块单独看都不难，但凑在一起坑很多（坐标系、四元数顺序、规划器报错）。
+所以先用一个最小的抓取闭环，把整条链路走一遍，后面再往电力设备的具体操作上扩。
+
+---
+
+## 目前跑通的部分
+
+| 环节 | 状态 | 关键数字 |
+|---|---|---|
+| ROS2 基础（话题 / 服务 / 参数 / launch / bag） | ✅ | — |
+| tf2 坐标变换与四元数 | ✅ | — |
+| 目标检测（YOLOv8n 训练 + ROS2 节点） | ✅ | mAP50 0.972 |
+| 实例分割（YOLOv8n-seg，输出多边形） | ✅ | mask mAP50 0.95 |
+| 相机标定（棋盘格） | ✅ | 重投影误差 1.37 px |
+| 像素 → 三维（射线-平面求交） | ✅ | 1 px ≈ 1.1 mm @ 0.5 m |
+| 抓取位姿（反投影 + 桌面空间最小外接矩形） | ✅ | 角度误差 < 1° |
+| 规划执行（MoveIt2 + fake hardware） | ✅ | 8 次动作到位 4–10 mm |
 
 ![pipeline](docs/pipeline_diagram.png)
 
-*反投影依赖三个前提：相机内参、相机到基座的坐标变换、桌面平面假设。*
+**一次跑通的记录**（46 秒录屏，左侧是分割看到的东西，右侧是 MoveIt 驱动的 UR5e）：
 
-**背景**：电气工程本科，保研至浙江大学工程师学院机械（具身操作方向）。毕业设计课题为**电力场景下的机械臂操作**，硬件平台是实验室的 UR5。这个仓库是入学前把技术栈跑通的过程记录，也是毕设的前期工作。
+[演示视频](https://github.com/yuan-yingxue/ur5-vision-grasp/releases/download/v0.1-demo/demo_day10.mp4)
 
-**当前状态**：端到端链路已跑通——图像 → 分割 → 3D 位姿 → MoveIt 执行，到位误差 4–10 mm。
-下一步是失败分析与成功率统计。
+> 说明：当前用 fake hardware，**没有物理引擎**，所以演示的是「位姿可达」而不是物理抓取。
+> 真机部分要在实验室的 UR5 上再做一遍。
 
 ---
 
-## Demo
-
-**[▶ 演示视频（46 秒 · 47 MB）](https://github.com/yuan-yingxue/ur5-vision-grasp/releases/download/v0.1-demo/demo_day10.mp4)** ｜ [Release 页](https://github.com/yuan-yingxue/ur5-vision-grasp/releases/tag/v0.1-demo)
-
-画面三块：左侧是分割模型看到的东西（绿色轮廓 = 计算器，黄框 = 决定抓取朝向的最小外接矩形），
-右侧是 MoveIt 驱动的 UR5e，下方是每帧的到位误差。
+## 目录结构
 
 ```
-分割识别（mask mAP50 0.95）
-    ↓ 多边形反投影到桌面
-算出 3D 位姿（棋盘格标定，重投影误差 0.51 px）
-    ↓ MoveGroup action
-MoveIt 规划执行
-    ↓
-到位误差 4–10 mm（8 次动作）
+ros2_ws/
+├── src/turtle_ctrl/
+│   ├── turtle_ctrl/          # 各节点
+│   │   ├── circle.py              发布者练习
+│   │   ├── pose_listener.py       订阅者练习
+│   │   ├── param_circle.py        参数练习
+│   │   ├── tf_demo.py             tf2 练习
+│   │   ├── detector.py            检测节点（bbox）
+│   │   ├── detector_seg.py        检测节点（多边形）
+│   │   ├── grasp_pose_v3.py       反投影 + 位姿
+│   │   ├── grasp_executor.py      发 MoveIt 目标
+│   │   ├── image_cycler.py        循环发图（替代静态假相机）
+│   │   ├── add_table.py           往规划场景加桌面碰撞体
+│   │   └── det_view.py            检测结果可视化
+│   ├── launch/               # launch 文件
+│   └── setup.py
+├── calib_test_640/           # 固定机位拍的标定/演示图（640 版）
+├── docs/                     # 每天的记录与证据
+└── README.md
 ```
 
-> ⚠️ 演示用 fake hardware，**没有物理引擎**，所以展示的是「位姿可达」而非物理抓取。
-> 物理抓取成功率需要 Gazebo 或真机。
-
 ---
 
-## 进度
-
-| 周 | 天 | 内容 | 状态 |
-|---|---|---|---|
-| — | Day 1 | 节点与话题（publisher / subscriber） | ✅ |
-| — | Day 2 | 服务、参数、launch、rosbag | ✅ |
-| 第一周 | Day 3 | tf2 坐标变换 + 四元数 | ✅ |
-| 第一周 | Day 4 | YOLO 训练（mAP50 0.972） | ✅ |
-| 第一周 | Day 5 | 包成 ROS2 检测节点 | ✅ |
-| 第一周 | Day 6 | 相机标定 + 像素到 3D（RMS 1.37 px） | ✅ |
-| 第一周 | Day 7 | 抓取位姿（位置 + 姿态） | ✅ |
-| 第二周 | Day 8 | MoveIt2 规划（RViz 里让他动起来） | ✅ |
-| 第二周 | Day 9 | 实例分割 + 真实朝向（mask mAP50 0.95） | ✅ |
-| 第二周 | Day 10 | 端到端闭环 + Demo 视频 | ✅ |
-| 第二周 | Day 11–14 | 失败分析 + 数据管线 + 论文阅读 | ⬜ |
-| 第三周 | Day 15–21 | 面试准备 + 作品集整理 | ⬜ |
-
-详细日程与每日证据见 `docs/` 与提交记录。
-
----
-
-## 目前完成的内容
-
-| 文件 / 目录 | 说明 |
-|---|---|
-| `src/turtle_ctrl/turtle_ctrl/circle.py` | 发布者：驱动 turtlesim 画圆 |
-| `src/turtle_ctrl/turtle_ctrl/pose_listener.py` | 订阅者：实时打印位姿 |
-| `src/turtle_ctrl/turtle_ctrl/param_circle.py` | 用 ROS2 参数控制半径，支持运行时热改 |
-| `src/turtle_ctrl/turtle_ctrl/detector.py` | YOLOv8 检测节点：订阅图像，发布像素框 |
-| `src/turtle_ctrl/turtle_ctrl/grasp_pose.py` | 反投影节点：像素框 → 基座 3D 位姿 |
-| `src/turtle_ctrl/launch/demo.launch.py` | 一条命令起多节点，带条件开关 |
-| `calib/` | 15 张棋盘格标定图 + `camera_params.npz` |
-
-**已验证**：
-
-- 检测：60 张图训练，mAP50 **0.972**，单帧推理 **3.3 ms**
-- 标定：15 张图，重投影误差 **1.37 px**，输出 `K640`
-- 反投影：三个物体输出 `(X, Y, Z)`，Z 恒为 0（平面假设的结果）
-- 检测节点能跟上 **9.95 Hz** 的输入频率
-- `ros2 param set` / `ros2 bag` / launch 条件启动均已跑通
-
----
-
-## 关键数字
-
-| 指标 | 值 | 含义 |
-|---|---|---|
-| mAP50 | 0.972 | 60 张训练 / 12 张验证，样本偏小 |
-| 推理延迟 | 3.3 ms | 640×480 输入 |
-| 标定 RMS | 1.37 px | 换算到 0.5 m 约 0.23 mm |
-| 空间分辨率 | 1 px ≈ 1.1 mm | 相机高 0.8 m 时 |
-| 检测频率 | 9.95 Hz | 够实时抓取 |
-| 相机高度（棋盘格解出） | 81.4 cm | 两张独立照片差 3.3 mm |
-| 标定重投影误差（新图） | 0.51 px | 4096×3072 原图 |
-| 格子边长重建误差 | 0.3 % | 24.70 → 24.77 mm |
-| **MoveIt 到位误差** | **4.1 – 9.8 mm** | 8 次动作，容差 10 mm |
-
----
-
-## 快速开始
-
-**环境**：Windows 11 + WSL2 (Ubuntu 22.04) + ROS2 Humble + Python 3.10 + RTX 4060
+## 怎么跑（fake hardware）
 
 ```bash
-# 0. 编译
 cd ~/ros2_ws
 colcon build --symlink-install --packages-select turtle_ctrl
 source install/setup.bash
 ```
 
 ```bash
-# 1. 发布相机到基座的坐标变换（终端 1）
-ros2 run tf2_ros static_transform_publisher --x 0.5 --y 0.0 --z 0.8 \
-  --qx 1 --qy 0 --qz 0 --qw 0 \
+# 1. 相机位姿（棋盘格解出来的）
+ros2 run tf2_ros static_transform_publisher --x 0.6275 --y 0.0834 --z 0.8079 \
+  --qx 0.993020 --qy 0.117085 --qz -0.013712 --qw 0.003723 \
   --frame-id base_link --child-frame-id camera_link
 ```
 
 ```bash
-# 2. 假相机（终端 2）—— 真机时换成真实相机驱动
-ros2 run image_publisher image_publisher_node "$(ls ~/ros2_ws/datasets/grasp/valid/images/*.jpg | head -1)" \
-  --ros-args -r image_raw:=/camera/image_raw -r camera_info:=/camera/camera_info -p frame_id:=camera_link
-```
+# 2. MoveIt + RViz
+ros2 launch turtle_ctrl ur5e_moveit_small.launch.py
 
-```bash
-# 3. 检测（终端 3）
-ros2 run turtle_ctrl detector
+# 3. 桌面碰撞体
+ros2 run turtle_ctrl add_table
 
-# 4. 反投影（终端 4）
-ros2 run turtle_ctrl grasp_pose
-```
+# 4. 循环发图
+ros2 run turtle_ctrl image_cycler --ros-args -p dir:=$HOME/ros2_ws/calib_test_640
 
-预期在终端 4 看到：
-
-```
-[INFO] cls=1 conf=0.99 pos=(0.691, 0.206, 0.000)
-[INFO] cls=0 conf=0.97 pos=(0.448, 0.033, 0.000)
-[INFO] cls=2 conf=0.99 pos=(0.594, -0.248, 0.000)
+# 5. 检测 → 位姿 → 执行
+ros2 run turtle_ctrl detector_seg
+ros2 run turtle_ctrl grasp_pose_v3
+ros2 run turtle_ctrl grasp_executor
 ```
 
 ---
 
-## 仓库结构
+## 已知问题
 
-```
-ros2_ws/
-├── src/turtle_ctrl/           # ROS2 包
-│   ├── turtle_ctrl/           # Python 节点
-│   ├── launch/                # launch 文件
-│   ├── setup.py
-│   └── package.xml
-├── calib/                     # 标定图 + camera_params.npz
-├── docs/                      # 每日证据（图 / 命令输出 / 链路图）
-└── README.md
-```
+这些是搭的过程中记下来的，还没解决或者暂时绕过去的：
+
+- **fake hardware 没有物理** —— 只能验证位姿可达，抓取是否抓稳要上 Gazebo 或真机
+- **相机高度靠棋盘格反解** —— 81.4 cm，但拍摄时棋盘格被挪过一次，两张照片解出的位置差了 12 cm
+- **目标离基座太近会规划失败** —— 23 cm 时接近基座正下方的奇异区，把相机 tf 平移 30 cm 后才稳定
+- **`INVALID_MOTION_PLAN` 只是重试兜底** —— 没根治时间参数化的问题
+- **演示物体的尺寸接近夹爪极限** —— 计算器短边 8.5 cm，正好是 2F-85 的最大开度
+- **背景误检** —— 场景里没有的杯子和耳机也会被检出（0.3–0.8），靠类别 + 置信度阈值过滤
+- **反投影假设物体贴在桌面上** —— 有高度的物体（杯子）会把上半部分投到桌面外，尺寸偏大
 
 ---
 
-## 路线图
+## 记录
 
-- **第一周**：ROS2 基础 → YOLO 训练 → 相机标定 → 像素到 3D
-- **第二周**：MoveIt2 规划 + 抓取闭环 + 成功率统计 + 示教数据管线
-- **第三周**：失败分析、简历与作品集、面试准备
+按天的记录在 `docs/` 里，包括训练曲线、标定参数、每天的终端输出和调试过程。
+踩过的坑和当时的判断过程都留在 commit 里，方便以后回看。
 
 ---
 
-## 关于
+## 参考
 
-- 武汉大学 电气工程及其自动化（2027 届）
-- 浙江大学 工程师学院 机械（2027 级，具身操作方向）
-- 欢迎交流：通过 GitHub Issue 或 Profile 页联系
+- ROS2 Humble 官方文档
+- MoveIt2 教程
+- Ultralytics YOLOv8 文档
+- OpenCV 相机标定教程
