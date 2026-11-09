@@ -10,3 +10,6 @@ runs/
 *.mp4
 docs/bag*/
 calib_test/
+*.bak*
+calib/*.jpg
+calib/*.JPG

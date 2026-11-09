@@ -1,322 +1,182 @@
-# 学习笔记（Day 0 – 10）
+# 开发笔记
 
-> 用途：面试素材 + 复盘。每天收工前更新。
-> 原则：只记「能复述的事实」和「踩过的坑」，不写流水账。
-
----
-
-## 0. 数字账本（面试用，最重要）
-
-| 指标 | 数值 | 怎么来的 |
-|---|---|---|
-| 训练集规模 | **60 张 / 182 个框 / 3 类** | Roboflow 标注后统计 |
-| 数据划分 | train 42 / valid 12 / test 6 | Roboflow 默认 70/20/10 |
-| **mAP50** | **0.972** | 80 epochs 训练后验证 |
-| mAP50-95 | 0.900 | 同上（说明框贴合度高） |
-| Precision / Recall | 0.949 / 0.976 | 同上 |
-| 单类 mAP50 | counter 0.995 / cup 0.995 / **earphone 0.925** | earphone 最差 |
-| 推理速度 | **3.3 ms/张**（640×480） | YOLO val 输出 |
-| 训练耗时 | **约 1 分钟**（80 epochs，RTX 4060） | 日志 `0.016 hours` |
-| 检测节点频率 | **9.95 Hz** | `ros2 topic hz /detections` |
-| 误报情况 | 原始 7 个框 → 过滤后 3 个（**误报率 57%**） | 单张验证图对比 |
-| 输入图像尺寸 | 640×480（原图 4:3，Fit within 640） | Roboflow 预处理 |
-| 棋盘格实测边长 | **24.7 mm**（标称 25） | 打印后用尺子量，直接影响绝对尺度 |
-| 标定 RMS 重投影误差 | **1.37 px** | 15 张标定图 |
-| 内参（全分辨率 4096×3072） | fx=2920.29 fy=2920.76 cx=2029.76 cy=1542.84 | cv2.calibrateCamera |
-| **K640（检测图用）** | **fx=456.29 fy=456.37 cx=317.15 cy=241.07** | 按 0.15625 缩放 |
-| 分辨率 | 1 px ≈ **1.1 mm** @ 0.5 m | 0.5 / fx |
-| 3D 输出示例 | cup(0.691,0.206,0) counter(0.448,0.033,0) earphone(0.594,-0.248,0) | `/grasp_points` |
-| 相机高度（棋盘格解出） | **81.4 cm** | 两张独立照片差 3.3mm |
-| 棋盘格解位姿重投影误差 | **0.51 px** | 4096×3072 原图 |
-| 格子边长重建误差 | **0.3 %**（24.70 → 24.77 mm） | 用真实相机位置 |
-| MoveIt 到位误差 | **4.1 – 9.8 mm** | 容差 10mm（约束球 10mm 直径） |
-| 目标置信度 | 真计算器 **0.95–0.99**，误检 0.81 | 阈值取 0.9 |
-| 演示视频 | 46.5 s / 5+ 次动作 | — |
+> 搭这套视觉抓取链路时的参数记录、结论和踩过的坑。
+> 按主题组织，方便以后查；按时间的调试过程留在 commit 里。
 
 ---
 
-## 1. 环境清单（重装时照着抄）
+## 1. 环境
 
 | 组件 | 版本 / 配置 |
 |---|---|
-| 系统 | Windows 11 24H2 + WSL2 Ubuntu 22.04 |
+| 系统 | Windows 11 + WSL2 Ubuntu 22.04 |
 | ROS2 | Humble |
-| Python | 3.10.12（系统 python3） |
+| Python | 3.10.12 |
 | PyTorch | 2.14.1+cu130 |
-| numpy | 2.2.6 |
-| scipy | 1.15.3 |
-| matplotlib | 3.10.9 |
-| pandas | 2.3.3 |
-| Pillow | 12.3.0 |
-| opencv | 5.0.0（opencv-python-headless） |
+| OpenCV | 5.0.0（headless） |
 | ultralytics | 8.4.194 |
-| setuptools | **79.0.1**（必须 <80） |
-| packaging | 26.3 |
-| **RMW** | **rmw_cyclonedds_cpp**（写进 ~/.bashrc） |
-
-**关键配置**：
+| setuptools | 79.0.1（必须 <80，colcon-core 要求） |
+| RMW | rmw_cyclonedds_cpp |
 
 ```bash
 # ~/.bashrc
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+```
 
+```ini
 # ~/.wslconfig（Windows 侧）
 [wsl2]
 networkingMode=mirrored
 autoProxy=true
+memory=9GB
+swap=8GB
 ```
 
 ---
 
-## 2. 每日记录
+## 2. 关键参数与实测数字
 
-### Day 0（10/27）环境
-- **做了什么**：装 pip → torch → numpy/scipy/opencv，验证 GPU
-- **卡在哪**：`pip: command not found`；`ros2 --version` 不存在
-- **怎么解决**：`apt install python3-pip`；ROS 版本看 `printenv ROS_DISTRO`
-- **记住**：`pip --user` 装的东西优先级高于系统包，埋下了后面一连串 ABI 坑
-
-### Day 1（10/28）节点与话题
-- **做了什么**：turtlesim + 手写 `circle.py`（发布）/ `pose_listener.py`（订阅），首次 git 提交
-- **卡在哪**：
-  1. `colcon build` 报 `canonicalize_version() got an unexpected keyword` → setuptools 84 vs packaging 21.3
-  2. `setup.py` 的 `circle` 写了两次 → 报 `'setup.py' is not a Distutils setup script`（**真因在报错上一行**）
-  3. `Package not found` → 忘了 `source install/setup.bash`
-- **怎么解决**：装 `setuptools<80` + `packaging>=23`；删重复行
-- **一句话总结**：**发布者是"我主动发"，订阅者是"别人发给我"——后者必须给回调**
-
-### Day 2（10/29）服务 / 参数 / launch / bag
-- **做了什么**：`ros2 service call /spawn`、`param_circle` 热改半径、写 `demo.launch.py`、录放 bag
-- **卡在哪**：
-  1. `param_circle.py` 放到了外层包目录 → `ModuleNotFoundError`
-  2. 在 `~/ros2_ws/src` 里跑 `colcon build` → 生成错位的 `src/install`
-  3. launch 报 `file 'demo.launch.py' was not found in share` → **压根没建 launch 目录**
-- **怎么解决**：
-  - 文件必须在内层 `turtle_ctrl/turtle_ctrl/`
-  - `colcon build` 只能在 `~/ros2_ws`（有 `src/` 的那层）
-  - launch 目录 + `data_files` 里加 `glob('launch/*.launch.py')`
-- **一句话总结**：**动了"注册信息"就要 build，只改代码内容不用（`--symlink-install`）**
-
-### Day 3（10/30）tf2 与四元数
-- **做了什么**：`static_transform_publisher` 发布 `base_link→camera_link`、`tf2_echo` 查询、`view_frames` 生成树、手算带旋转的坐标变换
-- **核心公式**：`P_base = R · P_cam + t`
-- **手算结果**：相机俯 90°，点 `(0.2,0,1.0)` → **`(0.7, -1.0, 0.8)`**（已用 scipy 验证）
-- **卡在哪**：`tf2_echo` 刷 `Waiting ... frame does not exist` 十几分钟
-- **怎么解决**：**换 CycloneDDS**（Fast DDS 在 WSL 下端点能匹配但数据到不了）
-- **一句话总结**：**四元数 = 轴 × sin(θ/2) + cos(θ/2)；复合旋转是四元数乘法，不是点乘**
-
-### Day 4（10/31）YOLO 训练
-- **做了什么**：装 ultralytics → coco8 验证 GPU → 拍 60 张 → Roboflow 标注 → 训练 80 轮 → 读指标
-- **卡在哪**：
-  1. `pip install` 报 `Network is unreachable` → 没加镜像（IPv6 无路由）
-  2. `numpy.core.multiarray failed to import` → 系统 matplotlib/pandas/Pillow 是 numpy 1.x 编译的
-  3. **Roboflow 项目类型选成了 Segmentation** → 标签是多边形（每行 49/97/109 个字段）
-  4. `data.yaml` 里 `../train/images` → 解析到不存在的目录
-  5. `git commit` 显示 nothing to commit → `runs/` `datasets/` 被 gitignore
-- **怎么解决**：
-  - 加 `-i 清华源`；`pip --user --upgrade matplotlib pandas pillow scipy`
-  - **写脚本把多边形转外接矩形**（182 个框），不用重标
-  - `data.yaml` 改成 `path:` + 相对路径
-  - 证据 `cp` 到 `docs/day04/` 再提交
-- **一句话总结**：**训练只要 1 分钟，标注和数据处理才是主要工作量**
-
-### Day 5（11/01）包成 ROS2 节点
-- **做了什么**：`image_publisher` 造假相机 → 离线推理验证 → 写 `detector.py` → 联调
-- **节点接口**：订阅 `/camera/image_raw`（`sensor_msgs/Image`）→ 发布 `/detections`（`Float32MultiArray`，每 6 个数一组）
-- **过滤策略**：`conf=0.5` + `iou=0.45` + **每类只保留最高分**（场景先验：每类一个物体）
-- **卡在哪**：
-  1. remap 写成 `-r image:=...`（实际话题叫 `image_raw`）→ **静默失效**
-  2. param 写成 `-p rate:=2.0`（实际叫 `publish_rate`）→ **静默失效**
-  3. 节点名是 `/ImagePublisher`（大写），`/image_publisher` 查不到
-  4. **`cv_bridge` 报 `_ARRAY_API not found` + segfault**（同样是 numpy 2 vs apt 包的 ABI 问题）
-  5. heredoc 粘贴串行 → `EOFnt(...)` 乱码 + SyntaxError
-- **怎么解决**：
-  - 改完 remap/param 立刻用 `topic list` / `param list` / `echo --field` 验证
-  - **不用 cv_bridge，6 行手动解码** `sensor_msgs/Image`（`data` → `reshape(height, step)` → 截断 → RGB→BGR）
-  - 长脚本写文件再跑，别用 heredoc 粘
-- **一句话总结**：**节点和脚本的区别是"谁控制循环"——脚本我调用别人，节点别人调用我**
-
-### Day 6（11/03 一）相机标定 + 像素到三维
-- **做了什么**：打印棋盘格（实测 24.7mm）→ 拍 15 张 → 标定求 K → 写 `grasp_pose` 节点 → 跑通像素→3D
-- **核心公式**：`d_cam = K⁻¹·[u,v,1]` → `d_base = R·d_cam` → `s = -t_z / d_base_z` → `P = s·R·d_cam + t`
-- **卡在哪**：
-  1. **标定图竖屏（3072×4096），检测图横屏（640×480）** → 主点错位，需旋转标定图重标
-  2. **K 忘了缩放** → 全分辨率 K 用在 640 图上，3D 坐标会差 6.4 倍
-  3. **tf 里相机是"平视"的**（R=I）→ 射线平行于桌面，`s<0`，`/grasp_points` 一直是空数组，**且不报错**
-  4. `.wslconfig` 带 UTF-8 BOM → WSL 启动报"未知键"
-- **怎么解决**：
-  - 标定图 `cv2.rotate(..., ROTATE_90_CLOCKWISE)` 后重标
-  - K 按 `640/4096 = 0.15625` 缩放，存成 `K640`
-  - tf 加俯视旋转：`--qx 1 --qw 0`（180° 绕 x，光轴朝下）
-  - `.wslconfig` 用无 BOM 的 UTF-8 重写
-- **一句话总结**：**单目没有深度，靠"物体在桌面上"这个假设补出来；tf 不只描述位置，还描述朝向**
-
-### Day 7（11/03 二）位姿（位置 + 朝向）
-- **做了什么**：`/detections` → `PoseArray`，加四元数朝向（工具朝下 + 绕 z 转 yaw），RViz 验证
-- **卡在哪**：
-  1. 四元数乘法顺序（`q_yaw * q_down` 还是反过来）
-  2. 话题名是复数 `grasp_poses_v3`，节点名是 `grasp_pose_v3`，RViz 里找话题找不到
-  3. RViz 里 Fixed Frame 选不到 `base_link`（tf 没起来）
-- **怎么解决**：左乘绕世界轴、右乘绕自身轴 → `q_yaw * q_down`；用 `R@(0,0,1) ≈ (0,0,-1)` 验证；手动输入 Fixed Frame
-- **一句话总结**：**位置 + 姿态才是完整位姿；夹爪不仅要去哪，还要以什么方向去**
-
-### Day 9（11/05 四）换分割 + 真实朝向
-- **做了什么**：用多边形标签重训 `yolov8n-seg`（mask mAP50 **0.95**）；写 `detector_seg`（发布多边形）和 `grasp_pose_v3`（世界空间 minAreaRect）
-- **核心对比**（自己做的仿真实验，0°–45° 倾斜）：
-  - bbox 法角度误差 **35°–55°**（不可用）
-  - 图像 minAreaRect → 反投影：0–2.33°
-  - **全部点反投影 → 世界 minAreaRect：0.00°**（最终选择）
-- **卡在哪**：
-  1. `AssertionError: data field must be float`（序列里有 `int`/`np.float32`）
-  2. `TypeError: can only extend array with array`（对 `msg.data` 用了 `+=` list）
-  3. 耳机是不规则形状，`minAreaRect` 对它角度不稳、尺寸虚胖
-- **怎么解决**：list 攒 + 一次赋值 + 每个元素 `float()`；不规则物体不适合最小外接矩形（需要抓取点检测）
-- **一句话总结**：**`minAreaRect` 最小化的是"给定坐标系里的面积"——在像素空间最小化的是像素面积，不是物理面积**
-
-### Day 10（11/06 五）端到端闭环 + demo
-- **做了什么**：
-  - 用棋盘格解相机位姿（重投影误差 **0.51px**、高度 **81.4cm**、倾斜 2.5°）
-  - 把 8 个节点串成流水线（tf / MoveIt / 桌面 / 相机 / 检测 / 位姿 / 执行 / 可视化）
-  - 录 46.5 秒 demo，5+ 次动作，到位误差 **4.1–9.8mm**
-- **卡在哪**：
-  1. 两张棋盘格照片解出的相机位置差 12cm → **棋盘格被挪动过**
-  2. `error_code=99999` 失败率 50% → **目标离基座只有 23cm，接近奇异位形**
-  3. `error_code=-2`（`INVALID_MOTION_PLAN`）偶发
-  4. 机械臂反复回同一位姿 → 10Hz 重复发同一目标
-  5. 机械臂能规划到桌面以下 → 规划场景里没有桌子
-  6. 开度恒等于 8.5cm → 计算器短边 8.2cm 已接近夹爪极限（2F-85 是 8.5cm）
-- **怎么解决**：tf 的 `--x` +30cm（目标挪到 55cm）；0.5s 延迟自动重试；位姿去重（1cm/5°）；`add_table` 加桌面碰撞体；只发 class 0 且 conf≥0.9
-- **一句话总结**：**从一张照片到机械臂动作，端到端跑通，误差 4–10mm**
+| 项目 | 数值 | 怎么来的 |
+|---|---|---|
+| 棋盘格方格边长 | 24.7 mm（标称 25） | 打印后用尺子量 |
+| 相机内参（4096×3072） | fx 2920.29 / fy 2920.76 / cx 2029.76 / cy 1542.84 | cv2.calibrateCamera |
+| **K640（实际用）** | fx 456.29 / fy 456.37 / cx 317.15 / cy 241.07 | 按 0.15625 缩放 |
+| 标定重投影误差 | 1.37 px（旧图）/ **0.51 px**（固定机位新图） | calibrateCamera 返回 |
+| 相机高度 | **81.4 cm** | 棋盘格 solvePnP 解出 |
+| 相机倾斜 | 2.5° | 同上 |
+| 空间分辨率 | 1 px ≈ 1.1 mm @ 0.5 m | 0.5 / fx |
+| 检测 mAP50 | 0.972 / mAP50-95 0.900 | 60 张训练 80 epochs |
+| 分割 mask mAP50 | **0.95** | 同一批数据，yolov8n-seg |
+| 推理速度 | 3.3 ms（detect）/ 4.7 ms（seg） | val 输出 |
+| 检测节点频率 | 9.95 Hz | ros2 topic hz |
+| 抓取到位误差 | **4–10 mm** | MoveIt 执行后查 TF |
 
 ---
 
-## 3. 踩过的坑（按类型）
+## 3. 链路与各节点
 
-### 类型 A：名字写错但**静默失效**
+```
+image_cycler → /camera/image_raw → detector_seg → /seg_polygons
+    → grasp_pose_v3 → /grasp_poses_v3（全部）+ /grasp_target（目标类）
+    → grasp_executor → /move_action → move_group → /execute_trajectory
+    → fake hardware → /joint_states → RViz
+
+det_view ← 图像 + /seg_polygons + /grasp_poses_v3 → /detection_view → rqt_image_view
+```
+
+| 节点 | 作用 |
+|---|---|
+| `detector_seg.py` | YOLOv8-seg 推理，每个 mask 取轮廓 → approxPolyDP → 最多 32 点 |
+| `grasp_pose_v3.py` | 多边形全部反投影到 z=0 → 世界坐标 minAreaRect → 位姿 |
+| `grasp_executor.py` | 组 MoveGroup 目标（位置 + 朝向约束）→ 发 action → 查 TF 算误差 |
+| `image_cycler.py` | 循环发一组图，替代只能发一张的 image_publisher |
+| `add_table.py` | 往规划场景加桌面碰撞体 |
+| `det_view.py` | 检测结果可视化（自动裁剪到目标活动区域） |
+
+**消息格式**：`/seg_polygons` 每物体一段 `[ n, x1,y1, ..., xn,yn, cls, conf ]`。
+
+---
+
+## 4. 参数与阈值的依据
+
+| 参数 | 取值 | 依据 |
+|---|---|---|
+| `conf` / `iou`（检测） | 0.5 / 0.45 | 单张图上 7 个框 → 3 个，其余为重复框或低置信误检 |
+| `conf_target`（抓取） | **0.9** | 8 张图里真目标 0.95–0.99，一个误检 0.81，中间有 0.14 的空隙 |
+| `vel_scale`（执行） | 0.35 | 0.1 时单次动作 42 秒，太慢；0.35 约 12 秒 |
+| 位置约束 | 10 mm 直径球 | 比这更严会让规划失败率上升 |
+| 朝向约束 | 0.2 rad | 夹爪朝下已经由四元数保证，容差可放宽 |
+| 桌面碰撞体 `top_z` | −5 mm | 设在 0 会和 UR5 的 base_link 碰撞几何重叠，导致自身碰撞 |
+| `exclude_bottom`（可视化） | 0.25 | 画面底部是无关内容，裁掉 |
+
+---
+
+## 5. 踩坑记录
+
+### A. 名字写错但静默失效
 | 现象 | 真因 |
 |---|---|
 | 话题名没变 | `-r image:=...` 应该是 `image_raw` |
-| 频率没变 | `-p rate:=2.0` 应该是 `publish_rate` |
+| 参数没生效 | `-p rate:=2.0` 应该是 `publish_rate` |
 | `Node not found` | 节点名 `ImagePublisher` 区分大小写 |
 
-**规律**：ROS 的 remap / param 匹配不上就不管，**不报错**。改完必须验证。
-
-### 类型 B：pip 覆盖系统包导致 ABI 崩
+### B. 依赖版本冲突
 | 报错 | 冲突 |
 |---|---|
 | `canonicalize_version() got an unexpected keyword` | setuptools 84 vs packaging 21.3 |
-| `ValueError: numpy.dtype size changed` | numpy 2 vs 系统 scipy 1.8 |
-| `numpy.core.multiarray failed to import` | numpy 2 vs 系统 matplotlib/pandas/Pillow |
-| `AttributeError: _ARRAY_API not found`（cv_bridge） | numpy 2 vs apt 版 cv_bridge |
+| `numpy.core.multiarray failed to import` | numpy 2 vs apt 装的 matplotlib/pandas |
+| `_ARRAY_API not found`（cv_bridge） | numpy 2 vs apt 版 cv_bridge |
+| `TypeError: can only extend array with array` | `msg.data` 是 array.array，不能 `+=` list |
 
-**规律**：`~/.local` 优先级 > `/usr/lib/python3/dist-packages`。**pip 装了 numpy，就要把依赖 numpy ABI 的包都用 pip 装一遍。**
-
-### 类型 C：文件位置 / 构建目录
+### C. 文件位置 / 构建
 | 现象 | 真因 |
 |---|---|
-| `ModuleNotFoundError: turtle_ctrl.xxx` | `.py` 放到了外层包目录 |
-| 编译了却找不到模块 | 在 `src/` 里跑 `colcon build`，生成错位 `install` |
-| launch 找不到文件 | `launch/` 目录不存在，或没写进 `data_files` |
+| `ModuleNotFoundError` | `.py` 放到了外层包目录 |
+| 编译了却找不到 | 在 `src/` 里跑 colcon build，生成了错位的 install |
+| launch 找不到文件 | `launch/` 目录不存在，或没写进 data_files |
 
-### 类型 D：WSL 网络
-| 现象 | 真因 | 解决 |
-|---|---|---|
-| `git push` 卡死、无输出 | WSL NAT 看不到 Windows 的 `127.0.0.1:7897` 代理 | `.wslconfig` 加 `networkingMode=mirrored` + `autoProxy=true` |
-| ROS 节点互相看不见 | Fast DDS 在 WSL 下发现不稳定 | 换 CycloneDDS |
-| `Network is unreachable` | pip 走 IPv6，无出口 | 加 `-i 镜像` |
+### D. WSL 网络
+| 现象 | 解决 |
+|---|---|
+| git push 卡死无输出 | `.wslconfig` 加 `networkingMode=mirrored` + `autoProxy=true` |
+| 节点互相看不见 | 换 CycloneDDS |
+| pip 报 `Network is unreachable` | 加 `-i 清华源` |
 
-### 类型 E：数据格式
+### E. 数据格式
 | 现象 | 真因 |
 |---|---|
-| 标签每行 49/97/109 个字段 | Roboflow 项目是 Segmentation，导出多边形 |
-| `data.yaml` 找不到图片 | `../train/images` 相对路径解析错 |
-| 误报 57% | 训练集缺"负样本"（背景干扰物），且每张图都是"三类各一个"的固定构图 |
+| 标签每行几十个字段 | Roboflow 项目类型选成了 Segmentation，导出的是多边形 |
+| `data.yaml` 找不到图 | `../train/images` 相对路径解析错 |
 
-### 类型 F：几何 / 坐标（Day 6）
-| 现象 | 真因 | 解决 |
+### F. 几何 / 坐标
+| 现象 | 真因 |
+|---|---|
+| `/grasp_points` 一直空数组 | tf 里相机光轴朝前，射线平行桌面，`s<0` 全被丢弃 |
+| 3D 坐标差 6.4 倍 | 用了全分辨率 K 而不是 K640 |
+| 尺寸偏大 2~4 倍 | 相机高度是假设值；且高物体的上半部分不在 z=0 上 |
+
+### G. 规划 / 执行
+| 现象 | 真因 | 处理 |
 |---|---|---|
-| `/grasp_points` 一直 `data: []`，无报错 | tf 里相机光轴朝前（R=I），射线平行于桌面 | tf 加俯视旋转 `--qx 1 --qw 0` |
-| 3D 坐标整体偏移几十像素级 | 标定图与检测图方向差 90° | 旋转标定图到同方向再标定 |
-| 3D 坐标差 6.4 倍 | 用了全分辨率 K | 缩放到检测图尺寸 |
-
-### 类型 G：MoveIt / 规划（Day 10）
-| 现象 | 真因 | 解决 |
-|---|---|---|
-| `error_code=99999`，失败率 50% | 目标离基座 23cm，接近基座正下方的**奇异位形** | 平移相机 tf 的 x +30cm，目标到 55cm |
-| `error_code=-2`（INVALID_MOTION_PLAN）偶发 | 时间参数化产生不合法轨迹 | 0.5 秒延迟自动重试（最多 2 次） |
-| 机械臂反复回同一位姿 | 同一张图以 10Hz 重复发同一目标 | 位姿去重（位置 <1cm 且朝向 <5° 视为同一） |
-| 能规划到 `z<0`（穿过桌面） | 规划场景里**没有桌子**这个碰撞体 | `add_table` 节点发 `CollisionObject` |
-| 开度恒等于上限 8.5cm | 计算器短边 8.2cm + 余量 1cm 超过夹爪最大开度 | 减小 margin；本质是**物体超出夹爪能力** |
+| `99999` 失败率 50% | 目标离基座 23 cm，接近基座正下方奇异区 | 平移相机 tf 的 x +30 cm，目标到 55 cm |
+| `-2 INVALID_MOTION_PLAN` 偶发 | 时间参数化产生不合法轨迹 | 0.5 秒延迟重试（最多 2 次） |
+| 反复回同一位姿 | 同一张图 10 Hz 重复发同一目标 | 位姿去重（1 cm / 5°） |
+| 能规划到 z<0 | 规划场景里没有桌面 | `add_table` 加 CollisionObject |
+| 开度恒等于上限 | 物体短边 8.2 cm + 余量 1 cm 超夹爪最大开度 | 减 margin；本质是物体超限 |
 
 ---
 
-## 4. 五个可复述的技术故事（面试用，各 90 秒）
+## 6. 三个排查过程
 
-### 故事 1：numpy 2 引发的连环 ABI 崩溃
-> 装完 PyTorch 后，`colcon build` 报 setuptools 版本冲突，接着 scipy、matplotlib、pandas 依次崩，最后 `cv_bridge` 直接 segfault。现象各不相同，根因是同一个：pip 装的 numpy 2 覆盖了系统 numpy 1.x，而系统里用 apt 装的 C 扩展是按旧 ABI 编译的。
-> 我的处理不是一个个修，而是先定位共同根因，然后分两类解决：能用 pip 升级的（scipy/matplotlib/pandas）全部升级到 numpy 2 版本；apt 装的 cv_bridge 无法升级，就自己写了 6 行代码解码 `sensor_msgs/Image`，绕过这个依赖。
+### 6.1 空数组：指标正常 ≠ 结果正确
+`/grasp_points` 一直输出空数组，但所有话题频率正常，也不报错。
+手算 `s = (0 - 0.8) / 1.0 = -0.8` 才反应过来：tf 里相机是平视的，
+光轴朝前，射线永远打不到脚下的桌面。加 180° 俯视旋转后正常。
 
-**这句话的价值**：讲出了"同一个根因、不同表象"的诊断能力。
+**教训**：进程不崩、频率正常、没有报错，唯一表现是数据为空。
 
-### 故事 2：从 Fast DDS 换到 CycloneDDS
-> 调 tf2 时 `tf2_echo` 一直报"坐标系不存在"，但 `ros2 topic echo /tf_static` 明明有数据，`ros2 topic info` 也显示订阅端 QoS 完全匹配。我依次排除了：发布者是否存活、话题是否存在、QoS 是否兼容、是否是迟到订阅者补发失败——都不是。
-> 最后对比测试两种 DDS 实现：Fast DDS 在该 WSL 环境下"端点能匹配、数据传不过去"，CycloneDDS 连测三次都是 2–3 秒出结果。于是把默认 RMW 换成 CycloneDDS，问题消失。这个改动对后面多节点通信都生效。
+### 6.2 规划失败不是规划器的问题
+失败率 50%，错误码 99999。先算目标的几何位置：离基座只有 23 cm，
+正好在奇异区。平移 30 cm 后失败率降到 12%，剩下的偶发 `-2` 加重试后基本消失。
 
-**这句话的价值**：讲出了对照实验和"用数据说话"的排查方法。
+**教训**：规划失败先看目标几何合理性，再调规划器参数。
 
-### 故事 3：把分割标注转成检测标注
-> 用 Roboflow 标注时项目类型选成了 Instance Segmentation，导出的标签是多边形（每行几十个坐标）。我不想重标 60 张，于是写脚本把每个多边形的外接矩形算出来（min/max），转成标准 YOLO 检测标签，182 个框全部转换成功，格式校验通过。
-> 判断依据是：抓取只需要物体位置和大小，像素级掩码没有额外价值；而分割模型推理慢 2–3 倍，对实时抓取是负收益。
+### 6.3 两张棋盘格照片解出的位姿差 12 cm
+同一个固定机位拍两张，解出的相机位置差 `Δx=4cm, Δy=11cm`。
+相机没动，是**棋盘格被重新摆过**。之后拍演示图时让棋盘格全程留在画面里不动。
 
-**这句话的价值**：讲出了"用需求反推技术选型"的判断力。
-
-
-### 故事 4：空数组 bug（指标正常 ≠ 结果正确）
-> `/grasp_points` 一直输出空数组，但所有话题的频率都正常：`/camera/image_raw` 10Hz、`/detections` 9.95Hz、`/grasp_points` 也在发——只是 `data` 为空。
-> 排查发现 `grasp_pose` 里有个 `s <= 0` 的保护，把所有点都丢了。手算 `s = (0 - 0.8) / 1.0 = -0.8`，才意识到 tf 里相机是"平视"的：光轴朝前，射线永远打不到脚下的桌面。给 tf 加上 180° 俯视旋转后立刻正常。
-> 这个 bug 最坑的地方是：**进程不崩、频率正常、没有报错**，唯一的表现是数据为空。所以"看指标"不等于"看结果"，必须检查数值本身是否合理。
-
-
-### 故事 5：规划失败不是规划器的问题
-> 串通流水线后，规划失败率高达 50%，错误码 `99999`（通用 FAILURE）。第一反应是去调 OMPL 参数、加规划时间。
-> 但我先算了一下目标的几何位置：它离机器人基座只有 **23cm**，正好落在**基座正下方**——这是 UR5e 的奇异位形区，IK 要么解不出，要么关节超限。
-> 把相机 tf 的 x 平移 30cm，让目标到 **55cm** 的舒适工作区后，失败率降到 12%；剩下的一次是 `-2`（INVALID_MOTION_PLAN，轨迹校验失败），加 0.5 秒延迟重试后基本消失。
-> 教训：**规划失败先看目标的几何合理性，再看规划器参数。**
+**教训**：用平面靶标定外参时，靶标的位置就是坐标系原点，动了靶标等于换了坐标系。
 
 ---
 
-## 5. 未解清单 / 待办
+## 7. 待解决
 
-**已完成**
-- [x] Day 4 / Day 5 证据已提交（`41b4f0e`）
-- [x] 相机标定完成（`calib/camera_params.npz`，K640 + RMS 1.37）
-- [x] Day 6：像素→3D 链路跑通
-- [x] Day 7：位姿（位置 + 四元数朝向）跑通
-- [x] Day 9：分割模型（mask mAP50 0.95）+ 多边形流水线
-- [x] Day 10：端到端闭环 + 46.5 秒 demo（到位误差 4–10mm）
-
-**待办（影响后续）**
-- [ ] **`tool0` 落在 z=0 没有夹爪高度补偿** → 真实夹爪（约 10cm）会插进桌面；部署时要抬高 `夹爪长度 + 物体高度/2`
-- [ ] **拍摄时棋盘格被挪动** → 两张照片解出的相机位置差 12cm；重拍时板子必须全程不动
-- [ ] **计算器短边 8.5cm ≈ 夹爪极限** → 实际抓取会很勉强，应换窄一点的演示物体
-- [ ] **误检未清除**：cup / earphone 在场景里不存在却被检出（conf 0.29–0.79），靠 class+conf 过滤绕开
-- [ ] **`/seg_polygons` 缺 header**（时间戳 / frame_id）→ 多节点异步时无法对齐
-- [ ] **假相机会掉帧**（标称 10Hz，偶发 5Hz）
-- [ ] **`INVALID_MOTION_PLAN` 只是重试兜底**，不是根治（根治要调时间参数化或降速）
-
-**杂项**
-- [ ] README 更新到 Day 10（加 demo 视频链接）
-- [ ] 类别名 `counter` 改为 `calculator`
-- [ ] 耳机（不规则）不适用 `minAreaRect`，需要抓取点检测
-- [ ] `NOTES.md.bak.*` 备份文件可删
-
----
-
-## 6. 每天收工前自检
-
-- [ ] 今天有 commit 吗？
-- [ ] 有能截图/录屏的产出吗？
-- [ ] 坑和解决办法记进这里了吗？
-- [ ] 明天的第一件事写下来了吗？
+- [ ] **`tool0` 落在 z=0 没有夹爪高度补偿** —— 真实夹爪约 10 cm，会插进桌面
+- [ ] **`INVALID_MOTION_PLAN` 只是重试兜底**，没解决时间参数化的问题
+- [ ] **演示物体尺寸接近夹爪极限**（8.5 cm vs 2F-85 的 8.5 cm）
+- [ ] **背景误检**：场景里没有的杯子和耳机也会被检出（0.3–0.8）
+- [ ] **反投影假设物体贴桌面**：有高度的物体会把上半部分投到桌面外
+- [ ] **`/seg_polygons` 缺 header**（时间戳 / frame_id）
+- [ ] **还没上真机**：目前只有 fake hardware + 手机拍的照片
